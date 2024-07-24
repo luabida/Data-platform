@@ -102,7 +102,8 @@ class PredictionSchema(Schema):
     description: str | None = None
     commit: str
     predict_date: date  # YYYY-mm-dd
-    prediction: AnyObject
+    prediction: AnyObject  # TODO: UP TO REMOVAL
+    data: List[PredictionDataRowSchema]
 
 
 class PredictionFilterSchema(FilterSchema):
