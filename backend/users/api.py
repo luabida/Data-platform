@@ -49,10 +49,13 @@ def download_image(user, url):
                 user.avatar.save(
                     filename,
                     files.base.ContentFile(response.content),
-                    save=True,
+                    save=False,
                 )
-                user.avatar_url = user.avatar.url
-                user.save(update_fields=["avatar_url"])
+                if not user.avatar_url or user.avatar_url.startswith(
+                    settings.MEDIA_URL
+                ):
+                    user.avatar_url = url
+                user.save(update_fields=["avatar", "avatar_url"])
     except Exception:
         pass
 
@@ -865,9 +868,8 @@ def upload_avatar(request, file: UploadedFile = File(...)):
         except Exception:
             pass
 
-    user.avatar.save(f"avatar_{user.pk}_{file.name}", file)
-    user.avatar_url = user.avatar.url
-    user.save(update_fields=["avatar_url", "avatar"])
+    user.avatar.save(f"avatar_{user.pk}_{file.name}", file, save=False)
+    user.save(update_fields=["avatar"])
 
     return 200, {"avatar_url": user.get_avatar()}
 

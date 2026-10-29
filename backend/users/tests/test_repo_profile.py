@@ -305,7 +305,29 @@ class DownloadImageTest(TestCase):
             MC.return_value.__enter__.return_value.get.return_value = resp
             users_api.download_image(self.user, "http://x/a.jpg")
         self.user.refresh_from_db()
-        self.assertIsNotNone(self.user.avatar_url)
+        self.assertEqual(self.user.avatar_url, "http://x/a.jpg")
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_success_preserves_remote_avatar_url(self):
+        self.user.avatar_url = "https://ex.com/original.png"
+        self.user.save()
+        resp = MagicMock(status_code=200, content=b"image")
+        with patch("httpx.Client") as MC:
+            MC.return_value.__enter__.return_value.get.return_value = resp
+            users_api.download_image(self.user, "http://x/a.jpg")
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.avatar_url, "https://ex.com/original.png")
+
+    @override_settings(MEDIA_ROOT=tempfile.mkdtemp())
+    def test_success_replaces_local_avatar_url(self):
+        self.user.avatar_url = "/media/avatars/old.jpg"
+        self.user.save()
+        resp = MagicMock(status_code=200, content=b"image")
+        with patch("httpx.Client") as MC:
+            MC.return_value.__enter__.return_value.get.return_value = resp
+            users_api.download_image(self.user, "http://x/a.jpg")
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.avatar_url, "http://x/a.jpg")
 
     def test_exception_passes(self):
         with patch("httpx.Client") as MC:
