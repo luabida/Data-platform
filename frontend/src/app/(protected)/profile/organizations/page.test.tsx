@@ -51,7 +51,8 @@ describe("app/(protected)/profile/organizations/page", () => {
     expect(screen.getByText("team")).toBeInTheDocument();
     expect(screen.getByText("profile_organizations.view")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByText("profile_organizations.import"));
+    const importButtons = screen.getAllByText("profile_organizations.import");
+    fireEvent.click(importButtons[importButtons.length - 1]);
 
     await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/acme"));
     expect((global.fetch as any).mock.calls[1][0]).toBe(
@@ -122,9 +123,33 @@ describe("app/(protected)/profile/organizations/page", () => {
     render(<OrganizationsPage />);
 
     await screen.findByText("acme");
-    fireEvent.click(screen.getByText("profile_organizations.import"));
+    const importButtons = screen.getAllByText("profile_organizations.import");
+    fireEvent.click(importButtons[importButtons.length - 1]);
 
     expect(await screen.findByText("denied")).toBeInTheDocument();
     expect(nav.push).not.toHaveBeenCalled();
+  });
+
+  it("imports an organization typed manually", async () => {
+    (global.fetch as any)
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse({ name: "manual-org" }));
+
+    render(<OrganizationsPage />);
+
+    await screen.findByText("profile_organizations.empty");
+
+    fireEvent.change(
+      screen.getByPlaceholderText("profile_organizations.name_placeholder"),
+      { target: { value: "manual-org" } }
+    );
+    fireEvent.click(screen.getByText("profile_organizations.import"));
+
+    await waitFor(() =>
+      expect(nav.push).toHaveBeenCalledWith("/manual-org")
+    );
+    expect((global.fetch as any).mock.calls[1][0]).toBe(
+      "/api/user/organizations/github/import"
+    );
   });
 });

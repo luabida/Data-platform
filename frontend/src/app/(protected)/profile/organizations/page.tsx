@@ -25,6 +25,7 @@ export default function OrganizationsPage() {
   const [loading, setLoading] = useState(true);
   const [notConnected, setNotConnected] = useState(false);
   const [importing, setImporting] = useState<string | null>(null);
+  const [manualName, setManualName] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -64,6 +65,7 @@ export default function OrganizationsPage() {
 
   const handleImport = async (organization: OAuthOrganization) => {
     setImporting(organization.name);
+    setManualName('');
     setError(null);
 
     try {
@@ -114,26 +116,67 @@ export default function OrganizationsPage() {
         </p>
       </div>
 
-      <div className="flex bg-gray-100 dark:bg-neutral-800 p-1 rounded-lg w-fit">
-        {(['github', 'gitlab'] as Provider[]).map((value) => (
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex bg-gray-100 dark:bg-neutral-800 p-1 rounded-lg w-fit">
+          {(['github', 'gitlab'] as Provider[]).map((value) => (
+            <button
+              key={value}
+              onClick={() => setProvider(value)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                provider === value
+                  ? 'bg-white dark:bg-neutral-900 text-gray-900 dark:text-white shadow-sm'
+                  : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'
+              }`}
+            >
+              {providerIcon(value)}
+              <span className="capitalize">{value}</span>
+            </button>
+          ))}
+        </div>
+
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            const name = manualName.trim();
+            if (!name) return;
+            handleImport({
+              name,
+              provider,
+              avatar_url: null,
+              imported: false,
+            });
+          }}
+          className="flex w-full gap-2 sm:w-auto"
+        >
+          <input
+            type="text"
+            value={manualName}
+            onChange={(event) => setManualName(event.target.value)}
+            placeholder={t('profile_organizations.name_placeholder')}
+            className="min-w-0 flex-1 rounded-lg border border-gray-300 bg-[var(--color-bg)] px-3 py-2 text-sm text-gray-900 outline-none focus:ring-2 focus:ring-blue-500 dark:border-neutral-700 dark:text-white sm:w-56"
+          />
           <button
-            key={value}
-            onClick={() => setProvider(value)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-              provider === value
-                ? 'bg-white dark:bg-neutral-900 text-gray-900 dark:text-white shadow-sm'
-                : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'
-            }`}
+            type="submit"
+            disabled={!manualName.trim() || importing === manualName.trim()}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
           >
-            {providerIcon(value)}
-            <span className="capitalize">{value}</span>
+            {importing === manualName.trim() && (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            )}
+            {t('profile_organizations.import')}
           </button>
-        ))}
+        </form>
       </div>
 
       {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-300">
-          {error}
+        <div className="flex flex-col gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-300 sm:flex-row sm:items-center sm:justify-between">
+          <span>{error}</span>
+          <Link
+            href="/profile/auth"
+            className="shrink-0 font-medium underline hover:no-underline"
+          >
+            {t('profile_organizations.manage_connections')}
+          </Link>
         </div>
       )}
 
@@ -159,6 +202,12 @@ export default function OrganizationsPage() {
           <p className="text-sm text-gray-500 dark:text-gray-400">
             {t('profile_organizations.empty', { provider })}
           </p>
+          <Link
+            href="/profile/auth"
+            className="mt-4 inline-flex rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-neutral-700 dark:text-gray-200 dark:hover:bg-neutral-800"
+          >
+            {t('profile_organizations.manage_connections')}
+          </Link>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

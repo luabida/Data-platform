@@ -798,25 +798,41 @@ def list_repositories(request, provider: Literal["github", "gitlab"]):
         raise e
 
 
-def _organization_name(provider: str, repo: dict) -> str:
-    if provider == "github":
-        return repo.get("owner", "")
-    return repo.get("owner") or repo.get("name", "").rsplit("/", 1)[0]
+def _fetch_provider_orgs(request, user, provider: Literal["github", "gitlab"]):
+    account = OAuthAccount.objects.get(user=user, provider=provider)
+    client = OAuthProvider.from_request(request, provider)
+
+    def fetch(token):
+        return client.get_user_orgs(token)  # type: ignore[attr-defined]
+
+    try:
+        return fetch(account.access_token)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code != 401 or not account.refresh_token:
+            raise
+
+        try:
+            tokens = client.refresh_access_token(  # type: ignore[attr-defined]
+                account.refresh_token
+            )
+        except Exception as refresh_error:
+            raise httpx.HTTPError(str(refresh_error)) from refresh_error
+
+        account.access_token = tokens["access_token"]
+        account.refresh_token = tokens.get(
+            "refresh_token", account.refresh_token
+        )
+        account.save(update_fields=["access_token", "refresh_token"])
+        return fetch(account.access_token)
 
 
-def _accessible_organizations(
-    provider: str, repos: list[dict], raw_info: dict
+def _normalize_organizations(
+    provider: str, orgs: list[dict]
 ) -> dict[str, dict]:
-    own_names = set()
-    for key in ("login", "username"):
-        value = raw_info.get(key)
-        if value:
-            own_names.add(str(value).lower())
-
     organizations: dict[str, dict] = {}
-    for repo in repos:
-        name = _organization_name(provider, repo)
-        if not name or name.lower() in own_names:
+    for org in orgs:
+        name = org.get("name")
+        if not name:
             continue
 
         organizations.setdefault(
@@ -824,8 +840,7 @@ def _accessible_organizations(
             {
                 "name": name,
                 "provider": provider,
-                "avatar_url": repo.get("owner_avatar_url")
-                or repo.get("avatar_url"),
+                "avatar_url": org.get("avatar_url"),
             },
         )
 
@@ -845,25 +860,15 @@ def _accessible_organizations(
 @decorate_view(never_cache)
 def list_organizations(request, provider: Literal["github", "gitlab"]):
     try:
-        account = OAuthAccount.objects.get(
-            user=request.auth, provider=provider
-        )
+        orgs = _fetch_provider_orgs(request, request.auth, provider)
     except OAuthAccount.DoesNotExist:
         return 404, {"message": f"Please link your {provider} account first."}
-
-    client = OAuthProvider.from_request(request, provider)
-    try:
-        repos = client.get_user_repos(  # type: ignore[attr-defined]
-            account.access_token
-        )
     except httpx.HTTPError as e:
         return 400, {
             "message": f"Could not fetch {provider} organizations: {e}"
         }
 
-    organizations = _accessible_organizations(
-        provider, repos, account.raw_info or {}
-    )
+    organizations = _normalize_organizations(provider, orgs)
     imported = {
         name.lower()
         for name in Organization.objects.values_list("name", flat=True)
@@ -895,25 +900,15 @@ def import_organization(
     payload: s.OrganizationImportIn,
 ):
     try:
-        account = OAuthAccount.objects.get(
-            user=request.auth, provider=provider
-        )
+        orgs = _fetch_provider_orgs(request, request.auth, provider)
     except OAuthAccount.DoesNotExist:
         return 404, {"message": f"Please link your {provider} account first."}
-
-    client = OAuthProvider.from_request(request, provider)
-    try:
-        repos = client.get_user_repos(  # type: ignore[attr-defined]
-            account.access_token
-        )
     except httpx.HTTPError as e:
         return 400, {
             "message": f"Could not fetch {provider} organizations: {e}"
         }
 
-    organizations = _accessible_organizations(
-        provider, repos, account.raw_info or {}
-    )
+    organizations = _normalize_organizations(provider, orgs)
     organization = organizations.get(payload.name.lower())
     if not organization:
         return 403, {

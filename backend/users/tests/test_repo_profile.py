@@ -362,18 +362,22 @@ class OrganizationImportTest(TestCase):
             + create_access_token({"sub": str(self.user.pk)})
         }
 
-    def _account(self, provider="github", raw_info=None):
+    def _account(self, provider="github", refresh_token=None):
         return OAuthAccount.objects.create(
             user=self.user,
             provider=provider,
             provider_id=f"{provider}-1",
-            raw_info=raw_info or {},
+            raw_info={},
             access_token="at",
+            refresh_token=refresh_token,
         )
 
-    def _get(self, provider, repos):
+    def _get(self, provider, orgs, side_effect=None):
         client = MagicMock()
-        client.get_user_repos.return_value = repos
+        if side_effect:
+            client.get_user_orgs.side_effect = side_effect
+        else:
+            client.get_user_orgs.return_value = orgs
         with patch(
             "users.api.OAuthProvider.from_request", return_value=client
         ):
@@ -381,9 +385,12 @@ class OrganizationImportTest(TestCase):
                 f"/api/user/organizations/{provider}/", **self.jwt
             )
 
-    def _import(self, provider, name, repos):
+    def _import(self, provider, name, orgs, side_effect=None):
         client = MagicMock()
-        client.get_user_repos.return_value = repos
+        if side_effect:
+            client.get_user_orgs.side_effect = side_effect
+        else:
+            client.get_user_orgs.return_value = orgs
         with patch(
             "users.api.OAuthProvider.from_request", return_value=client
         ):
@@ -395,57 +402,29 @@ class OrganizationImportTest(TestCase):
             )
 
     def test_list_github_organizations(self):
-        self._account(raw_info={"login": "orguser"})
+        self._account()
         rm.Organization.objects.create(name="acme")
-        repos = [
-            {
-                "owner": "orguser",
-                "name": "personal",
-                "owner_avatar_url": "https://a/orguser",
-            },
-            {
-                "owner": "acme",
-                "name": "repo",
-                "owner_avatar_url": "https://a/acme",
-            },
-            {
-                "owner": "neworg",
-                "name": "repo2",
-                "avatar_url": "https://a/neworg",
-            },
-            {"name": "missing-owner"},
-            {
-                "owner": "acme",
-                "name": "repo3",
-                "owner_avatar_url": "https://a/other",
-            },
+        orgs = [
+            {"name": "acme", "avatar_url": "https://a/acme"},
+            {"name": "neworg", "avatar_url": None},
+            {"name": "acme", "avatar_url": "https://a/other"},
+            {"name": ""},
         ]
-        r = self._get("github", repos)
+        r = self._get("github", orgs)
         self.assertEqual(r.status_code, 200)
         data = {o["name"]: o for o in r.json()}
         self.assertEqual(set(data), {"acme", "neworg"})
         self.assertTrue(data["acme"]["imported"])
         self.assertFalse(data["neworg"]["imported"])
         self.assertEqual(data["acme"]["avatar_url"], "https://a/acme")
-        self.assertEqual(data["neworg"]["avatar_url"], "https://a/neworg")
 
     def test_list_gitlab_organizations(self):
-        self._account(provider="gitlab", raw_info={"username": "orguser"})
-        repos = [
-            {
-                "owner": "team",
-                "name": "team/repo",
-                "owner_avatar_url": "https://a/team",
-            },
-            {"name": "other/repo", "avatar_url": "https://a/other"},
-            {"owner": "orguser", "name": "orguser/personal"},
-        ]
-        r = self._get("gitlab", repos)
+        self._account(provider="gitlab")
+        r = self._get(
+            "gitlab", [{"name": "team", "avatar_url": "https://a/team"}]
+        )
         self.assertEqual(r.status_code, 200)
-        data = {o["name"]: o for o in r.json()}
-        self.assertEqual(set(data), {"team", "other"})
-        self.assertEqual(data["team"]["provider"], "gitlab")
-        self.assertFalse(data["team"]["imported"])
+        self.assertEqual(r.json()[0]["provider"], "gitlab")
 
     def test_list_organizations_no_account_404(self):
         r = self.client.get("/api/user/organizations/github/", **self.jwt)
@@ -453,8 +432,35 @@ class OrganizationImportTest(TestCase):
 
     def test_list_organizations_http_error_400(self):
         self._account()
+        r = self._get("github", [], side_effect=_httpx_err(500))
+        self.assertEqual(r.status_code, 400)
+
+    def test_list_organizations_401_without_refresh_400(self):
+        self._account(refresh_token=None)
+        r = self._get("github", [], side_effect=_httpx_err(401))
+        self.assertEqual(r.status_code, 400)
+
+    def test_list_organizations_refreshes_token(self):
+        account = self._account(refresh_token="ref")
         client = MagicMock()
-        client.get_user_repos.side_effect = _httpx_err(500)
+        client.get_user_orgs.side_effect = [
+            _httpx_err(401),
+            [{"name": "acme", "avatar_url": None}],
+        ]
+        client.refresh_access_token.return_value = {"access_token": "new"}
+        with patch(
+            "users.api.OAuthProvider.from_request", return_value=client
+        ):
+            r = self.client.get("/api/user/organizations/github/", **self.jwt)
+        self.assertEqual(r.status_code, 200)
+        account.refresh_from_db()
+        self.assertEqual(account.access_token, "new")
+
+    def test_list_organizations_refresh_failure_400(self):
+        self._account(refresh_token="ref")
+        client = MagicMock()
+        client.get_user_orgs.side_effect = _httpx_err(401)
+        client.refresh_access_token.side_effect = ValueError("bad token")
         with patch(
             "users.api.OAuthProvider.from_request", return_value=client
         ):
@@ -472,38 +478,22 @@ class OrganizationImportTest(TestCase):
 
     def test_import_organization_http_error_400(self):
         self._account()
-        client = MagicMock()
-        client.get_user_repos.side_effect = _httpx_err(500)
-        with patch(
-            "users.api.OAuthProvider.from_request", return_value=client
-        ):
-            r = self.client.post(
-                "/api/user/organizations/github/import/",
-                data=json.dumps({"name": "acme"}),
-                content_type="application/json",
-                **self.jwt,
-            )
+        r = self._import("github", "acme", [], side_effect=_httpx_err(500))
         self.assertEqual(r.status_code, 400)
 
     def test_import_organization_forbidden_403(self):
-        self._account(raw_info={"login": "orguser"})
+        self._account()
         r = self._import(
-            "github", "acme", [{"owner": "other", "name": "repo"}]
+            "github", "acme", [{"name": "other", "avatar_url": None}]
         )
         self.assertEqual(r.status_code, 403)
 
     def test_import_organization_success(self):
-        self._account(raw_info={"login": "orguser"})
+        self._account()
         r = self._import(
             "github",
             "acme",
-            [
-                {
-                    "owner": "Acme",
-                    "name": "repo",
-                    "owner_avatar_url": "https://a/acme",
-                }
-            ],
+            [{"name": "Acme", "avatar_url": "https://a/acme"}],
         )
         self.assertEqual(r.status_code, 200)
         data = r.json()
@@ -519,27 +509,21 @@ class OrganizationImportTest(TestCase):
         )
 
     def test_import_organization_updates_existing(self):
-        self._account(raw_info={"login": "orguser"})
-        org = rm.Organization.objects.create(name="Acme")
+        self._account()
+        org = rm.Organization.objects.create(
+            name="Acme", avatar_url="https://old/avatar.png"
+        )
         rm.OrganizationMembership.objects.create(
             user=self.user,
             organization=org,
             role=rm.OrganizationMembership.Roles.CONTRIBUTOR,
         )
         r = self._import(
-            "github",
-            "acme",
-            [
-                {
-                    "owner": "Acme",
-                    "name": "repo",
-                    "owner_avatar_url": "https://a/acme",
-                }
-            ],
+            "github", "acme", [{"name": "Acme", "avatar_url": None}]
         )
         self.assertEqual(r.status_code, 200)
         org.refresh_from_db()
-        self.assertEqual(org.avatar_url, "https://a/acme")
+        self.assertEqual(org.avatar_url, "https://old/avatar.png")
         membership = rm.OrganizationMembership.objects.get(
             organization=org, user=self.user
         )
