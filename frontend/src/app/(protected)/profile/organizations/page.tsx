@@ -202,12 +202,24 @@ export default function OrganizationsPage() {
           <p className="text-sm text-gray-500 dark:text-gray-400">
             {t('profile_organizations.empty', { provider })}
           </p>
-          <Link
-            href="/profile/auth"
-            className="mt-4 inline-flex rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-neutral-700 dark:text-gray-200 dark:hover:bg-neutral-800"
-          >
-            {t('profile_organizations.manage_connections')}
-          </Link>
+          <p className="mx-auto mt-2 max-w-md text-xs text-gray-400">
+            {t('profile_organizations.empty_hint')}
+          </p>
+          {provider === 'github' ? (
+            <a
+              href="/api/user/oauth/install/github?next=%2Fprofile%2Forganizations"
+              className="mt-4 inline-flex rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              {t('profile_organizations.install_app')}
+            </a>
+          ) : (
+            <Link
+              href="/profile/auth"
+              className="mt-4 inline-flex rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-neutral-700 dark:text-gray-200 dark:hover:bg-neutral-800"
+            >
+              {t('profile_organizations.manage_connections')}
+            </Link>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

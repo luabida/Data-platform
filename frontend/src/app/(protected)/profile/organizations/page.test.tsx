@@ -88,6 +88,20 @@ describe("app/(protected)/profile/organizations/page", () => {
     );
   });
 
+  it("shows the GitHub App install action when no orgs are found", async () => {
+    (global.fetch as any).mockResolvedValueOnce(jsonResponse([]));
+
+    render(<OrganizationsPage />);
+
+    const install = await screen.findByText(
+      "profile_organizations.install_app"
+    );
+    expect(install.closest("a")).toHaveAttribute(
+      "href",
+      "/api/user/oauth/install/github?next=%2Fprofile%2Forganizations"
+    );
+  });
+
   it("shows a connect action when the provider is not connected", async () => {
     (global.fetch as any).mockResolvedValueOnce(
       jsonResponse({ message: "not found" }, 404)

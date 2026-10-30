@@ -797,6 +797,8 @@
     "description": "Importa organizaciones desde tu cuenta conectada de GitHub o GitLab.",
     "not_connected": "Conecta {{provider}} para importar organizaciones.",
     "manage_connections": "Gestionar conexiones",
+    "install_app": "Instalar GitHub App",
+    "empty_hint": "Instala la GitHub App en la organización y concede acceso a sus repositorios. Solo se listan organizaciones con una instalación.",
     "name_placeholder": "Login de la organización",
     "empty": "No se encontraron organizaciones en {{provider}}.",
     "view": "Ver",
