@@ -330,6 +330,9 @@ class GithubProvider(OAuthProvider):
                                     "private": r["private"],
                                     "provider": "github",
                                     "avatar_url": r["owner"]["avatar_url"],
+                                    "owner_avatar_url": r["owner"][
+                                        "avatar_url"
+                                    ],
                                 }
                             )
 
@@ -497,17 +500,19 @@ class GitlabProvider(OAuthProvider):
             projects = res.json()
 
             for p in projects:
+                namespace = p.get("namespace", {})
                 repos.append(
                     {
                         "id": str(p["id"]),
                         "name": p["path_with_namespace"],
+                        "owner": p["path_with_namespace"].rsplit("/", 1)[0],
                         "url": p["web_url"].strip("/"),
                         "private": p["visibility"] == "private",
                         "provider": "gitlab",
                         "avatar_url": (
-                            p.get("avatar_url")
-                            or p.get("namespace", {}).get("avatar_url")
+                            p.get("avatar_url") or namespace.get("avatar_url")
                         ),
+                        "owner_avatar_url": namespace.get("avatar_url"),
                     }
                 )
 

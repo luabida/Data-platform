@@ -20,6 +20,7 @@ from pydantic_core import PydanticCustomError
 
 from main.schema import ForbiddenSchema, NotFoundSchema, BadRequestSchema
 from registry.models import (
+    Organization,
     Repository,
     RepositoryModel,
     RepositoryContributor,
@@ -795,6 +796,158 @@ def list_repositories(request, provider: Literal["github", "gitlab"]):
                 }
 
         raise e
+
+
+def _organization_name(provider: str, repo: dict) -> str:
+    if provider == "github":
+        return repo.get("owner", "")
+    return repo.get("owner") or repo.get("name", "").rsplit("/", 1)[0]
+
+
+def _accessible_organizations(
+    provider: str, repos: list[dict], raw_info: dict
+) -> dict[str, dict]:
+    own_names = set()
+    for key in ("login", "username"):
+        value = raw_info.get(key)
+        if value:
+            own_names.add(str(value).lower())
+
+    organizations: dict[str, dict] = {}
+    for repo in repos:
+        name = _organization_name(provider, repo)
+        if not name or name.lower() in own_names:
+            continue
+
+        organizations.setdefault(
+            name.lower(),
+            {
+                "name": name,
+                "provider": provider,
+                "avatar_url": repo.get("owner_avatar_url")
+                or repo.get("avatar_url"),
+            },
+        )
+
+    return organizations
+
+
+@router.get(
+    "/organizations/{provider}/",
+    auth=JWTAuth(),
+    response={
+        200: list[s.OAuthOrganizationOut],
+        400: BadRequestSchema,
+        404: NotFoundSchema,
+    },
+    include_in_schema=False,
+)
+@decorate_view(never_cache)
+def list_organizations(request, provider: Literal["github", "gitlab"]):
+    try:
+        account = OAuthAccount.objects.get(
+            user=request.auth, provider=provider
+        )
+    except OAuthAccount.DoesNotExist:
+        return 404, {"message": f"Please link your {provider} account first."}
+
+    client = OAuthProvider.from_request(request, provider)
+    try:
+        repos = client.get_user_repos(  # type: ignore[attr-defined]
+            account.access_token
+        )
+    except httpx.HTTPError as e:
+        return 400, {
+            "message": f"Could not fetch {provider} organizations: {e}"
+        }
+
+    organizations = _accessible_organizations(
+        provider, repos, account.raw_info or {}
+    )
+    imported = {
+        name.lower()
+        for name in Organization.objects.values_list("name", flat=True)
+    }
+
+    return 200, [
+        {
+            **organization,
+            "imported": organization["name"].lower() in imported,
+        }
+        for organization in organizations.values()
+    ]
+
+
+@router.post(
+    "/organizations/{provider}/import/",
+    auth=JWTAuth(),
+    response={
+        200: s.OAuthOrganizationOut,
+        400: BadRequestSchema,
+        403: ForbiddenSchema,
+        404: NotFoundSchema,
+    },
+    include_in_schema=False,
+)
+def import_organization(
+    request,
+    provider: Literal["github", "gitlab"],
+    payload: s.OrganizationImportIn,
+):
+    try:
+        account = OAuthAccount.objects.get(
+            user=request.auth, provider=provider
+        )
+    except OAuthAccount.DoesNotExist:
+        return 404, {"message": f"Please link your {provider} account first."}
+
+    client = OAuthProvider.from_request(request, provider)
+    try:
+        repos = client.get_user_repos(  # type: ignore[attr-defined]
+            account.access_token
+        )
+    except httpx.HTTPError as e:
+        return 400, {
+            "message": f"Could not fetch {provider} organizations: {e}"
+        }
+
+    organizations = _accessible_organizations(
+        provider, repos, account.raw_info or {}
+    )
+    organization = organizations.get(payload.name.lower())
+    if not organization:
+        return 403, {
+            "message": (
+                f"You do not have access to the {provider} "
+                f"organization '{payload.name}'."
+            )
+        }
+
+    with transaction.atomic():
+        org = Organization.objects.filter(
+            name__iexact=organization["name"]
+        ).first()
+        if org:
+            org.avatar_url = organization["avatar_url"] or org.avatar_url
+            org.save(update_fields=["avatar_url"])
+        else:
+            org = Organization.objects.create(
+                name=organization["name"],
+                avatar_url=organization["avatar_url"],
+            )
+
+        OrganizationMembership.objects.update_or_create(
+            user=request.auth,
+            organization=org,
+            defaults={"role": OrganizationMembership.Roles.OWNER},
+        )
+
+    return 200, {
+        "name": org.name,
+        "provider": provider,
+        "avatar_url": org.get_avatar(),
+        "imported": True,
+    }
 
 
 @router.get(
